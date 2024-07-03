@@ -10,10 +10,11 @@ OPENAI_API_KEY = ""
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 OPENAI_MODEL = "gpt-3.5-turbo"
+
 st.title("📝 Generador de Publicaciones de LinkedIn/Blog")
 st.write(
     "Sube un documento PDF y genera una publicación de LinkedIn o un artículo de blog basado en su contenido. "
-    "Luego puedes modificar el contenido generado y pedir más refinamientos."
+    "Selecciona un tema de las sugerencias generadas, genera el contenido, y luego puedes refinarlo."
 )
 
 # Let the user choose between LinkedIn post or blog article
@@ -48,57 +49,95 @@ if uploaded_files:
         for page in pdf_reader.pages:
             document += page.extract_text()
 
-    # Generate content based on the PDFs
-    if st.button("Generar Contenido"):
+    # Generate content suggestions based on the PDFs
+    if st.button("Generar Sugerencias de Contenido"):
         messages = [
             {
                 "role": "system",
-                "content": f"Eres un asistente de IA que genera {content_type}(s) basado en el contenido de documentos PDF y tomando inspiración de las siguientes publicaciones de LinkedIn: {inspiration_posts}. Solo retorna el contenido:"
+                "content": f"Eres un asistente de IA que genera sugerencias de temas para {content_type}(s) basado en el contenido de documentos PDF y tomando inspiración de las siguientes publicaciones de LinkedIn: {inspiration_posts}. Genera una lista numerada de 5 sugerencias de temas."
             },
             {
                 "role": "user",
-                "content": f"Genera una {content_type} basada en el siguiente contenido del documento: {document}. El contenido debe tener aproximadamente {word_count} palabras."
+                "content": f"Genera 5 sugerencias de temas para {content_type} basadas en el siguiente contenido del documento: {document}."
             }
         ]
 
-        # Generate content using the OpenAI API with streaming
-        st.write(f"Generando {content_type}...")
-        generated_content = ""
-        stream = client.chat.completions.create(
+        # Generate content suggestions using the OpenAI API
+        st.write(f"Generando sugerencias de temas para {content_type}...")
+        response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
-            stream=True,
-            max_tokens=word_count * 5  # Approximate token count based on word count
+            max_tokens=500
         )
+        
+        st.session_state.content_suggestions = response.choices[0].message.content.split('\n')
+        st.session_state.generated_contents = {}
 
-        for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                generated_content += chunk.choices[0].delta.content
-                st.session_state.generated_content = generated_content
+    # Display content suggestions and let user interact with each
+    if 'content_suggestions' in st.session_state:
+        for i, suggestion in enumerate(st.session_state.content_suggestions):
+            with st.expander(f"{suggestion[:100]}..."):
+                st.text(suggestion)
+                if f"generated_content_{i}" not in st.session_state.generated_contents:
+                    if st.button(f"Generar Contenido", key=f"generate_{i}"):
+                        messages = [
+                            {
+                                "role": "system",
+                                "content": f"Eres un asistente de IA que genera {content_type}(s) basado en un tema seleccionado. Solo retorna el contenido:"
+                            },
+                            {
+                                "role": "user",
+                                "content": f"Genera una {content_type} basada en el siguiente tema: {suggestion}. El contenido debe tener aproximadamente {word_count} palabras."
+                            }
+                        ]
 
-# Textarea for editing the generated content
-if 'generated_content' in st.session_state:
-    # User input for refinement request
-    st.text_area("Contenido Generado:", value=st.session_state.generated_content, height=300)
-    refinement_request = st.text_input("Pidele algo al bot:")
+                        # Generate content using the OpenAI API with streaming
+                        st.write(f"Generando {content_type}...")
+                        generated_content = ""
+                        stream = client.chat.completions.create(
+                            model=OPENAI_MODEL,
+                            messages=messages,
+                            stream=True,
+                            max_tokens=word_count * 5  # Approximate token count based on word count
+                        )
 
-    if st.button("Refinar Contenido"):
-        messages = [
-            {"role": "system", "content": f"Eres un asistente de IA que ayuda a refinar una {content_type}. Solo retorna el contenido. Manten el contenido unico y no modifiques el tono del contenido."},
-            {"role": "user", "content": f"Aquí está el {content_type} actual:\n\n{st.session_state.generated_content}\n\Realiza lo siguiente: {refinement_request}"}
-        ]
+                        for chunk in stream:
+                            if chunk.choices[0].delta.content is not None:
+                                generated_content += chunk.choices[0].delta.content
+                        
+                        st.session_state.generated_contents[f"generated_content_{i}"] = generated_content
+                        st.rerun()
 
-        # Generate refined content using the OpenAI API with streaming
-        stream = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            stream=True
-        )
+                if f"generated_content_{i}" in st.session_state.generated_contents:
+                    content = st.session_state.generated_contents[f"generated_content_{i}"]
+                    st.text_area(f"Contenido Generado:", value=content, height=300, key=f"content_area_{i}")
+                    
+                    refinement_request = st.text_input(f"Pidele algo al bot para refinar el contenido:", key=f"refine_input_{i}")
+                    if st.button(f"Refinar Contenido", key=f"refine_button_{i}"):
+                        messages = [
+                            {"role": "system", "content": f"Eres un asistente de IA que ayuda a refinar una {content_type}. Solo retorna el contenido. Manten el contenido unico y no modifiques el tono del contenido."},
+                            {"role": "user", "content": f"Aquí está el {content_type} actual:\n\n{content}\n\Realiza lo siguiente: {refinement_request}"}
+                        ]
 
-        st.session_state.generated_content = ""
-        st.text("Refinando contenido...")
-        for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                st.session_state.generated_content += chunk.choices[0].delta.content
+                        # Generate refined content using the OpenAI API with streaming
+                        stream = client.chat.completions.create(
+                            model=OPENAI_MODEL,
+                            messages=messages,
+                            stream=True
+                        )
 
+                        refined_content = ""
+                        st.text(f"Refinando contenido de '{suggestion}'...")
+                        for chunk in stream:
+                            if chunk.choices[0].delta.content is not None:
+                                refined_content += chunk.choices[0].delta.content
+
+                        st.session_state.generated_contents[f"generated_content_{i}"] = refined_content
+                        st.rerun()
+
+# Option to reset and start over
+if 'content_suggestions' in st.session_state:
+    if st.button("Reiniciar y Generar Nuevas Sugerencias"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.rerun()

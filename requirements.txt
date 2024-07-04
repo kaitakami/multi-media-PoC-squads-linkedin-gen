@@ -1,2 +1,5 @@
 streamlit
 openai
+pytube
+deepgram-sdk
+PyPDF2

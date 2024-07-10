@@ -155,7 +155,6 @@ if st.button("Generar Sugerencias de Contenido"):
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
-            max_tokens=500
         )
         
         st.session_state.content_suggestions = response.choices[0].message.content.split('\n')
@@ -188,7 +187,6 @@ if 'content_suggestions' in st.session_state:
                         model=OPENAI_MODEL,
                         messages=messages,
                         stream=True,
-                        max_tokens=word_count * 5  # Approximate token count based on word count
                     )
 
                     for chunk in stream:

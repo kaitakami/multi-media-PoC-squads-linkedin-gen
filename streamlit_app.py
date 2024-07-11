@@ -3,7 +3,7 @@ import PyPDF2
 import io
 from openai import OpenAI
 import os
-from deepgram import DeepgramClient, DeepgramClientOptions, PrerecordedOptions, FileSource
+from deepgram import DeepgramClient, PrerecordedOptions
 import httpx
 from pytube import YouTube
 import tempfile
@@ -13,14 +13,43 @@ import requests
 # Create an OpenAI client
 
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Create a Deepgram client
 deepgram = DeepgramClient(os.getenv("DEEPGRAM_API_KEY"))
 
 OPENAI_MODEL = "gpt-4o"
+
+def get_system_message(content_type, voice_type, desired_tone):
+    if content_type == "Publicación de LinkedIn":
+        base_message = f"""Genera un {content_type} con un tono de voz {voice_type.lower()}. {desired_tone}
+        
+        Sigue estas pautas estrictamente:
+        1. No uses emojis.
+        2. Utiliza punto y aparte. No hagas punto y seguido. Deja una línea de espacio entre cada párrafo menos en el inicio, en el inicio deja 2 líneas de espacio.
+        3. No incluyas hashtags.
+        4. Usa viñetas o listas enumeradas para presentar información.
+        5. Mantén el contenido fácil de digerir, con párrafos cortos y concisos. Como un LinkedIn post.
+        6. Estructura el contenido de la siguiente manera:
+        - Una hook inicial de una linea, después dos lineas de espacio sin contenido. El hook tiene que ser suficientemente llamativo para que el usuario de click en mostrar más.
+        - El cuerpo principal con 2-3 puntos clave, usando viñetas o enumeración. Si el contenido es personal, usar parragrafos cortos y concisos.
+        - Una conclusión o llamada a la acción corta pero clara. No uses palabras como "En resumen, En conclusión".
+        7. No uses español castellano, usa español de Argentina, sin exagerar el acento, sigue las instrucciones dadas por el usuario, y el contenido de inspiración del usuario si existe.
+        Solo retorna el contenido, sin comentarios adicionales."""
+        
+        return base_message
+    else:
+        return f"""Genera un {content_type} con un tono de voz {voice_type.lower()}. {desired_tone}
+
+        Sigue estas pautas escrictamente:
+        1. Evitar las palabras muy repetitivos
+        2. 1500 y 2000 palabras
+        3. meter bullet points
+        4. meter numeracion
+        5. armar una tabla
+        6. una cita textual
+        7. Iniciar siempre con preguntas claves
+        """
 
 st.title("📝 SquadS Ventures PoC Generador de Publicaciones de LinkedIn/Blog")
 st.write(
@@ -96,13 +125,24 @@ elif input_type == "URLs de sitios web":
 else:
     text_input = st.text_area("Ingresa el texto:")
 
+voice_type = st.selectbox(
+    "Selecciona el tipo de voz para el contenido:",
+    options=["Experto", "Persuasivo", "Informal", "Formal", "Motivador", "Educativo"]
+)
+
 # Input for LinkedIn posts for inspiration
 inspiration_posts = st.text_area(
-    "Pega 2 o más publicaciones de LinkedIn para tomar inspiración:",
+    "Pega 2 o más publicaciones de LinkedIn para tomar inspiración: (opcional)",
     height=150
 )
 
-st.session_state.suggestions_num = st.slider("El número de sugerencias de contenido que quieres", 5, 25, 10)
+# Input for desired tone/voice
+desired_tone = st.text_area(
+    "Comparte que tipo de voz te gustaría que este contenido tenga:",
+    height=100
+)
+
+st.session_state.suggestions_num = 8
 
 # Input for desired word count
 word_count = st.number_input(
@@ -142,7 +182,7 @@ if st.button("Generar Sugerencias de Contenido"):
         messages = [
             {
                 "role": "system",
-                "content": f"Eres un asistente de IA que genera sugerencias de temas para {content_type}(s) basado en el contenido proporcionado y tomando inspiración de las siguientes publicaciones de LinkedIn: {inspiration_posts}. Genera una lista numerada de {st.session_state.suggestions_num} sugerencias de temas. Retorna en el siguiente formato:\n1. [primera sugestion]\n2. [segunda sugestion]\n3. [tercera sugestion]\n..."
+                "content": f"Eres un asistente de IA que genera sugerencias de temas para {content_type}(s) basado en el contenido proporcionado. Genera una lista numerada de {st.session_state.suggestions_num} sugerencias de temas. Retorna en el siguiente formato:\n1. [primera sugestion]\n2. [segunda sugestion]\n3. [tercera sugestion]\n..."
             },
             {
                 "role": "user",
@@ -155,6 +195,7 @@ if st.button("Generar Sugerencias de Contenido"):
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
+            temperature=0.7
         )
         
         st.session_state.content_suggestions = response.choices[0].message.content.split('\n')
@@ -165,63 +206,42 @@ if st.button("Generar Sugerencias de Contenido"):
 # Display content suggestions and let user interact with each
 if 'content_suggestions' in st.session_state:
     for i, suggestion in enumerate(st.session_state.content_suggestions):
-        with st.expander(f"{suggestion[:100]}..."):
-            st.text(suggestion)
-            if f"generated_content_{i}" not in st.session_state.generated_contents:
-                if st.button(f"Generar Contenido", key=f"generate_{i}"):
-                    messages = [
-                        {
-                            "role": "system",
-                            "content": f"Eres un asistente de IA que genera {content_type}(s) basado en un tema seleccionado.  Si el contenido es un post de linkedin, manten una estructura clara y usa pocos emojis. Solo retorna el contenido:"
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Genera una {content_type} basada en el siguiente tema: {suggestion}. El contenido debe tener aproximadamente {word_count} palabras."
-                        }
-                    ]
+        st.write(suggestion)
+        
+        if f"generated_content_{i}" not in st.session_state.generated_contents:
+            if st.button(f"Generar Contenido", key=f"generate_{i}"):
+                messages = [
+                    {
+                        "role": "system",
+                        "content": get_system_message(content_type, voice_type, desired_tone),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Genera una {content_type} basada en el siguiente tema: {suggestion}. El contenido debe tener aproximadamente {word_count} palabras."
+                    }
+                ]
 
-                    # Generate content using the OpenAI API with streaming
-                    st.write(f"Generando {content_type}...")
-                    generated_content = ""
-                    stream = client.chat.completions.create(
-                        model=OPENAI_MODEL,
-                        messages=messages,
-                        stream=True,
-                    )
+                # Generate content using the OpenAI API with streaming
+                st.write(f"Generando {content_type}...")
+                generated_content = ""
+                stream = client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=messages,
+                    stream=True,
+                    temperature=0.7
+                )
 
-                    for chunk in stream:
-                        if chunk.choices[0].delta.content is not None:
-                            generated_content += chunk.choices[0].delta.content
-                            st.session_state.generated_contents[f"generated_content_{i}"] = generated_content
-                    
-                    # st.rerun()
-
-            if f"generated_content_{i}" in st.session_state.generated_contents:
-                content = st.session_state.generated_contents[f"generated_content_{i}"]
-                st.text_area(f"Contenido Generado:", value=content, height=300, key=f"content_area_{i}")
+                for chunk in stream:
+                    if chunk.choices[0].delta.content is not None:
+                        generated_content += chunk.choices[0].delta.content
+                        st.session_state.generated_contents[f"generated_content_{i}"] = generated_content
                 
-                refinement_request = st.text_input(f"Pidele algo al bot para refinar el contenido:", key=f"refine_input_{i}")
-                if st.button(f"Refinar Contenido", key=f"refine_button_{i}"):
-                    messages = [
-                        {"role": "system", "content": f"Eres un asistente de IA que ayuda a refinar una {content_type}. Solo retorna el contenido. Manten el contenido unico y no modifiques el tono del contenido."},
-                        {"role": "user", "content": f"Aquí está el {content_type} actual:\n\n{content}\n\Realiza lo siguiente: {refinement_request}"}
-                    ]
+                st.rerun()
 
-                    # Generate refined content using the OpenAI API with streaming
-                    stream = client.chat.completions.create(
-                        model=OPENAI_MODEL,
-                        messages=messages,
-                        stream=True
-                    )
-
-                    refined_content = ""
-                    st.text(f"Refinando contenido...")
-                    for chunk in stream:
-                        if chunk.choices[0].delta.content is not None:
-                            refined_content += chunk.choices[0].delta.content
-
-                    st.session_state.generated_contents[f"generated_content_{i}"] = refined_content
-                    st.rerun()
+        if f"generated_content_{i}" in st.session_state.generated_contents:
+            content = st.session_state.generated_contents[f"generated_content_{i}"]
+            st.text_area(f"Contenido Generado:", value=content, height=300, key=f"content_area_{i}")
+            
 
 # Option to reset and start over
 if 'content_suggestions' in st.session_state:
